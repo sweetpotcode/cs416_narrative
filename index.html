@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>COVID-19 Impact vs Vaccination</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/d3-annotation/2.5.1/d3-annotation.min.js"></script>
+  <link rel="icon" href="data:image/x-icon;," type="image/x-icon">
+</head>
+<body>
+  <div id="header">
+    <h1>COVID-19 Impact vs Vaccination Across U.S. States</h1>
+    <p id="scene-description">Scene 1: Overview</p>
+    <div id="controls">
+      <label for="year-select">Select Year:</label>
+      <select id="year-select"></select>
+      <button id="prev-btn">◀ Previous</button>
+      <button id="next-btn">Next ▶</button>
+    </div>
+  </div>
+
+  <svg id="chart" width="900" height="600"></svg>
+
+  <script src="index.js"></script>
+</body>
+</html>

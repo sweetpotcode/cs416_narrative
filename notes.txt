@@ -1,0 +1,2 @@
+#dev webserver, cd to root dir:
+python -m http.server 8000

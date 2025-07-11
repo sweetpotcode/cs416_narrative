@@ -1,0 +1,15 @@
+body {
+  font-family: sans-serif;
+  margin: 20px;
+  background: #f9f9f9;
+}
+#header {
+  margin-bottom: 20px;
+}
+#controls {
+  margin-top: 10px;
+}
+svg {
+  background: white;
+  border: 1px solid #ccc;
+}
