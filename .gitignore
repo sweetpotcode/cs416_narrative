@@ -1,0 +1,25 @@
+# Ignore everything by default
+**
+
+# Re-allow folder structure
+!*/
+
+# Allow specific file types
+!*.pdf
+!*.ipynb
+!*.json
+!*.txt
+!*.csv
+!*.svg
+!*.png
+!*.PNG
+!*.jpeg
+!*.jpg
+!*.py
+!*.MD
+!*.md
+!*.js
+!.gitignore
+
+# But still ignore specific unwanted folders
+gitlog.txt

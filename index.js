@@ -126,8 +126,8 @@ function attachButtonEvents() {
 function updateScene() {
   const year = +d3.select("#year-select").property("value") || d3.max(yearList);
   const sceneText = [
-    "Scene 1: Overview - Deaths vs Cases (colored by Vaccination)",
-    "Scene 2: Avg Deaths per Vaccination Group",
+    "Scene 1: Average Deaths per Vaccination Group",
+    "Scene 2: Overview - Deaths vs Cases (colored by Vaccination)",
     "Scene 3: Highlight outlier states",
     "Scene 4: User exploration"
   ];
@@ -159,9 +159,9 @@ function drawScene(scene, data) {
   data.forEach(d => d.vax_group = classifyVax(d.vaccination_rate));
 
   if (scene === 0) {
-    drawScatter(data);
-  } else if (scene === 1) {
     drawBar(data);
+  } else if (scene === 1) {
+    drawScatter(data);
   } else if (scene === 2) {
     drawScatter(data, true); // with annotation
   } else if (scene === 3) {
