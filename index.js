@@ -5,6 +5,9 @@ let yearList = [];
 const width = 900, height = 600;
 const svg = d3.select("#chart");
 const margin = { top: 40, right: 30, bottom: 50, left: 60 };
+let pendingTimeouts = [];
+let regressionModel; // store model to avoid recomputing if needed
+
 
 // Load all CSVs and and bring up all visuals
 Promise.all([
@@ -114,7 +117,7 @@ function populateYearDropdown() {
 
 function attachButtonEvents() {
   d3.select("#next-btn").on("click", () => {
-    if (currentScene < 3) currentScene++;
+    if (currentScene < 2) currentScene++;
     updateScene();
   });
   d3.select("#prev-btn").on("click", () => {
@@ -128,15 +131,22 @@ function updateScene() {
   
   const year = +d3.select("#year-select").property("value") || d3.max(yearList);
   const sceneText = [
-    "Scene 1: Average Deaths per Vaccination Group",
-    "Scene 2: Overview - Deaths vs Cases for each state",
-    "Scene 3: Highlight outlier states",
-    "Scene 4: User exploration"
+    "Scene 1: Overview - Average Deaths per Vaccination Group",
+    "Scene 2: Deaths vs Cases for each state grouped by Vaccination Level",
+    "Scene 3: Explore Infection vs Vaccination",
   ];
   d3.select("#scene-description").text(sceneText[currentScene]);
 
   // Clear SVG
   svg.selectAll("*").remove();
+
+  // Cancel any pending timeouts
+  pendingTimeouts.forEach(clearTimeout);
+  pendingTimeouts = [];
+
+  // Remove hint and annotation text immediately
+  d3.select("#next-hint").text("").style("opacity", 0);
+  svg.selectAll(".scene-hint").remove();  // class to mark scene-specific annotations
 
   const filtered = allData.filter(d => d.date.getFullYear() === year);
   const latest = d3.rollups(filtered, v => v.at(-1), d => d.state)
@@ -165,236 +175,8 @@ function gotoScene(scene, data) {
   } else if (scene === 1) {
     drawScene2(data);
   } else if (scene === 2) {
-    drawScene2(data, true); // with annotation
-  } else if (scene === 3) {
-    drawScene2(data); // user can explore freely
+    drawScene3(data);
   }
-}
-
-//Death and Cases for each state under different vacination levels
-function drawScene2_bak(data, withAnnotation = false) {
-  const groupColors = {
-    "Above 1 S.D. (78%+)": "green",
-    "Above Mean (68%-78%)": "gold",
-    "Below Mean (<68%)": "red"
-  };
-
-  const xExtent = d3.extent(data, d => d.cases_per_100k);
-  const yExtent = d3.extent(data, d => d.deaths_per_100k);
-
-  const x = d3.scaleLinear()
-    .domain([xExtent[0] * 0.95, xExtent[1] * 1.05])
-    .range([margin.left, width - margin.right]);
-
-  const y = d3.scaleLinear()
-    .domain([yExtent[0] * 0.95, yExtent[1] * 1.05])
-    .range([height - margin.bottom, margin.top]);
-
-  const legendGroups = [
-    { label: "Above 1 S.D. (78%+)", color: "green", shape: d3.symbolStar },
-    { label: "Above Mean (68%-78%)", color: "gold", shape: d3.symbolTriangle },
-    { label: "Below Mean (<68%)", color: "red", shape: d3.symbolCircle }
-  ];
-
-  // Track active filters
-  let activeGroups = new Set(legendGroups.map(g => g.label));
-
-  svg.append("g")
-    .attr("transform", `translate(0,${height - margin.bottom})`)
-    .call(d3.axisBottom(x));
-  svg.append("g")
-    .attr("transform", `translate(${margin.left},0)`)
-    .call(d3.axisLeft(y));
-
-  /*
-  svg.selectAll("circle")
-    .data(data)
-    .enter()
-    .append("circle")
-    .attr("cx", d => x(d.cases_per_100k))
-    .attr("cy", d => y(d.deaths_per_100k))
-    .attr("r", 6)
-    .attr("fill", d => groupColors[d.vax_group] || "gray")
-    .attr("opacity", 0.8)
-    .append("title")
-    .text(d => `${d.state}: ${d.vax_group}\nCases/100k: ${d.cases_per_100k.toFixed(0)}\nDeaths/100k: ${d.deaths_per_100k.toFixed(1)}`);
-  /**/
-
-  /*
-  const legend = svg.append("g")
-    .attr("transform", `translate(${width - 220}, ${margin.top})`);
-
-  legend.selectAll("legend-item")
-    .data(legendGroups)
-    .enter()
-    .append("g")
-    .attr("class", "legend-item")
-    .attr("transform", (_, i) => `translate(0, ${i * 30})`)
-    .each(function (d) {
-      d3.select(this)
-        .append("path")
-        .attr("d", d3.symbol().type(d.shape).size(100))
-        .attr("fill", d.color)
-        .attr("stroke", "black");
-
-      d3.select(this)
-        .append("text")
-        .attr("x", 20)
-        .attr("y", 5)
-        .text(d.label)
-        .style("cursor", "pointer")
-        .on("click", () => {
-          if (activeGroups.has(d.label)) {
-            activeGroups.delete(d.label);
-          } else {
-            activeGroups.add(d.label);
-          }
-          updateFilteredDots(); // redraw
-        });
-    });
-    */
-
-    const legend = svg.append("g")
-      .attr("class", "legend-box")
-      .attr("transform", `translate(${width - 220}, ${margin.top})`);
-
-    // Title
-    legend.append("text")
-      .attr("x", 0)
-      .attr("y", -20)
-      .attr("font-weight", "bold")
-      .attr("font-size", "12px")
-      .text("") // blank base text
-      .call(text => {
-        text.append("tspan").attr("x", 0).attr("dy", "1em").text("Vaccination Level");
-        text.append("tspan").attr("x", 0).attr("dy", "1em").text("(click to filter)");
-      });
-
-    // Group container
-    const legendItems = legend.selectAll(".legend-item")
-      .data(legendGroups)
-      .enter()
-      .append("g")
-      .attr("class", "legend-item")
-      .attr("transform", (_, i) => `translate(0, ${i * 30})`)
-      .style("cursor", "pointer")
-      .on("click", (event, d) => {
-        if (activeGroups.has(d.label)) {
-          activeGroups.delete(d.label);
-        } else {
-          activeGroups.add(d.label);
-        }
-        updateFilteredDots();
-      });
-
-    // "Checkbox" rectangles
-    legendItems.append("rect")
-      .attr("x", -5)
-      .attr("y", -10)
-      .attr("width", 18)
-      .attr("height", 18)
-      .attr("fill", d => activeGroups.has(d.label) ? d.color : "white")
-      .attr("stroke", d => d.color)
-      .attr("stroke-width", 2);
-
-    // Symbol
-    legendItems.append("path")
-      .attr("transform", "translate(15, 0)")
-      .attr("d", d => d3.symbol().type(d.shape).size(100)())
-      .attr("fill", d => d.color)
-      .attr("stroke", "black");
-
-    // Label
-    legendItems.append("text")
-      .attr("x", 35)
-      .attr("y", 5)
-      .text(d => d.label);
-
-    // Add background rectangle *within* the legend group itself
-    setTimeout(() => {
-      const bbox = legend.node().getBBox();
-      legend.insert("rect", ":first-child")  // insert at the back of legend group
-        .attr("x", bbox.x - 10)
-        .attr("y", bbox.y - 10)
-        .attr("width", bbox.width + 20)
-        .attr("height", bbox.height + 20)
-        .attr("fill", "#f9f9f9")
-        .attr("stroke", "#ccc")
-        .attr("rx", 6)
-        .attr("ry", 6);
-    }, 0);
-    
-
-    /*
-    const shaped_dots = d3.symbol().type(d => {
-        if (d.vax_group === "Above 1 S.D. (78%+)") return d3.symbolStar;
-        if (d.vax_group === "Above Mean (68%-78%)") return d3.symbolTriangle;
-        return d3.symbolCircle;
-      }).size(100);
-
-    svg.selectAll("path")
-    .data(data)
-    .enter()
-    .append("path")
-    .attr("d", shaped_dots)
-    .attr("transform", d => `translate(${x(d.cases_per_100k)},${y(d.deaths_per_100k)})`)
-    .attr("fill", d => groupColors[d.vax_group] || "gray")
-    .attr("opacity", 0.8)
-    .append("title")
-    .text(d => `${d.state}: ${d.vax_group}\nCases/100k: ${d.cases_per_100k.toFixed(0)}\nDeaths/100k: ${d.deaths_per_100k.toFixed(1)}`);
-    */
-
-    function updateFilteredDots() {
-      svg.selectAll(".data-dot").remove();  // clear old
-
-      const filtered = data.filter(d => activeGroups.has(d.vax_group));
-
-      svg.selectAll(".data-dot")
-        .data(filtered)
-        .enter()
-        .append("path")
-        .attr("class", "data-dot")
-        .attr("d", shaped_dots)
-        .attr("transform", d => `translate(${x(d.cases_per_100k)},${y(d.deaths_per_100k)})`)
-        .attr("fill", d => groupColors[d.vax_group] || "gray")
-        .attr("opacity", 0.8)
-        .append("title")
-        .text(d => `${d.state}: ${d.vax_group}\nCases/100k: ${d.cases_per_100k.toFixed(0)}\nDeaths/100k: ${d.deaths_per_100k.toFixed(1)}`);
-    }
-
-    // define the symbol generator just before that
-    const shaped_dots = d3.symbol().type(d => {
-      if (d.vax_group === "Above 1 S.D. (78%+)") return d3.symbolStar;
-      if (d.vax_group === "Above Mean (68%-78%)") return d3.symbolTriangle;
-      return d3.symbolCircle;
-    }).size(100);
-
-    // Initial render
-    updateFilteredDots();
-
-    svg.append("text")
-      .attr("x", width / 2).attr("y", height - 10)
-      .attr("text-anchor", "middle")
-      .text("Cases per 100k");
-
-    svg.append("text")
-      .attr("x", -height / 2).attr("y", 20)
-      .attr("text-anchor", "middle")
-      .attr("transform", "rotate(-90)")
-      .text("Deaths per 100k");
-
-    if (withAnnotation) {
-      const maxState = data.reduce((a, b) => a.deaths_per_100k > b.deaths_per_100k ? a : b);
-      const annotations = [{
-        note: { label: "Highest death rate", title: maxState.state },
-        x: x(maxState.cases_per_100k),
-        y: y(maxState.deaths_per_100k),
-        dy: -30,
-        dx: -30
-      }];
-      const makeAnnotations = d3.annotation().annotations(annotations);
-      svg.append("g").call(makeAnnotations);
-    }
 }
 
 //Overall Death vs vaccination level
@@ -482,6 +264,7 @@ function drawScene1(data) {
     .attr("transform", "rotate(-90)")
     .text("Avg Deaths per 100k");
 
+  /*
   setTimeout(() => {
     svg.append("text")
       .attr("x", width / 2)
@@ -496,7 +279,6 @@ function drawScene1(data) {
       .style("opacity", 1);
   }, 3000);
 
-  /* */
   setTimeout(() => {
     setTimeout(() => {
       d3.select("#next-hint")
@@ -507,6 +289,32 @@ function drawScene1(data) {
     }, 1000);
   }, 3000); // outer delay: bar animation duration
   /* */
+  // annotation text
+  pendingTimeouts.push(setTimeout(() => {
+    svg.append("text")
+      .attr("class", "scene-hint")
+      .attr("x", width / 2)
+      .attr("y", margin.top - 10)
+      .attr("text-anchor", "middle")
+      .attr("font-size", "16px")
+      .attr("fill", "gray")
+      .style("opacity", 0)
+      .text("Higher vaccination levels are associated with lower average death rates.")
+      .transition()
+      .duration(trans_time)
+      .style("opacity", 1);
+  }, 3000));
+
+  // hint text near next button
+  pendingTimeouts.push(setTimeout(() => {
+    pendingTimeouts.push(setTimeout(() => {
+      d3.select("#next-hint")
+        .text("◀ Click to explore: State-level deaths vs. cases")
+        .transition()
+        .duration(trans_time)
+        .style("opacity", 1);
+    }, 1000));
+  }, 3000));
 }
 
 function drawScene2(data, withAnnotation = false) {
@@ -544,26 +352,27 @@ function drawScene2(data, withAnnotation = false) {
 
   const legend = svg.append("g")
     .attr("class", "legend-box")
-    .attr("transform", `translate(${width - 220}, ${margin.top})`);
+    .attr("transform", `translate(${width - 200}, ${margin.top})`);  // shift left for more space
 
-  // Title
+  // Title with better wording
   legend.append("text")
     .attr("x", 0)
-    .attr("y", -20)
+    .attr("y", -25)
     .attr("font-weight", "bold")
     .attr("font-size", "12px")
     .text("")
     .call(text => {
-      text.append("tspan").attr("x", 0).attr("dy", "1em").text("Vaccination Level");
-      text.append("tspan").attr("x", 0).attr("dy", "1em").text("(click to filter)");
+      text.append("tspan").attr("x", 0).attr("dy", "1em").text("Filter by Vaccination Level");
+      text.append("tspan").attr("x", 0).attr("dy", "1em").text("(click labels below)");
     });
 
+  // Group container
   const legendItems = legend.selectAll(".legend-item")
     .data(legendGroups)
     .enter()
     .append("g")
     .attr("class", "legend-item")
-    .attr("transform", (_, i) => `translate(0, ${i * 30})`)
+    .attr("transform", (_, i) => `translate(0, ${i * 30 + 20})`)  // more vertical spacing
     .style("cursor", "pointer")
     .on("click", (event, d) => {
       if (activeGroups.has(d.label)) {
@@ -574,18 +383,20 @@ function drawScene2(data, withAnnotation = false) {
       updateFilteredDots();
     });
 
-  // Symbol only (no pseudo checkbox)
+  //addshaped dots
   legendItems.append("path")
     .attr("transform", "translate(0, 0)")
     .attr("d", d => d3.symbol().type(d.shape).size(100)())
     .attr("fill", d => d.color)
     .attr("stroke", "black");
 
-  // Label with smaller font
+  // Labels with hyperlink style
   legendItems.append("text")
     .attr("x", 20)
     .attr("y", 5)
-    .attr("font-size", "11px")
+    .attr("font-size", "12px")
+    .attr("fill", "#0645AD") // hyperlink blue
+    .style("text-decoration", "underline")
     .text(d => d.label);
 
   setTimeout(() => {
@@ -593,7 +404,7 @@ function drawScene2(data, withAnnotation = false) {
     legend.insert("rect", ":first-child")
       .attr("x", bbox.x - 10)
       .attr("y", bbox.y - 10)
-      .attr("width", bbox.width + 20)
+      .attr("width", bbox.width + 40)
       .attr("height", bbox.height + 20)
       .attr("fill", "#f9f9f9")
       .attr("stroke", "#ccc")
@@ -650,4 +461,119 @@ function drawScene2(data, withAnnotation = false) {
     const makeAnnotations = d3.annotation().annotations(annotations);
     svg.append("g").call(makeAnnotations);
   }
+}
+
+function drawScene3(data) {
+  const groupColors = {
+    "Above 1 S.D. (78%+)": "green",
+    "Above Mean (68%-78%)": "gold",
+    "Below Mean (<68%)": "red"
+  };
+
+  const x = d3.scaleLinear()
+    .domain([60, 90])  // assuming vaccination rate range
+    .range([margin.left, width - margin.right]);
+
+  const y = d3.scaleLinear()
+    .domain([0, d3.max(data, d => d.cases_per_100k)]).nice()
+    .range([height - margin.bottom, margin.top]);
+
+  svg.append("g")
+    .attr("transform", `translate(0,${height - margin.bottom})`)
+    .call(d3.axisBottom(x).tickFormat(d => d + "%"));
+
+  svg.append("g")
+    .attr("transform", `translate(${margin.left},0)`)
+    .call(d3.axisLeft(y));
+
+  svg.selectAll("circle")
+    .data(data)
+    .enter()
+    .append("circle")
+    .attr("cx", d => x(d.vaccination_rate))
+    .attr("cy", d => y(d.cases_per_100k))
+    .attr("r", 6)
+    .attr("fill", d => groupColors[d.vax_group] || "gray")
+    .attr("opacity", 0.8)
+    .append("title")
+    .text(d => `${d.state}: ${d.vax_group}\nVax Rate: ${d.vaccination_rate}%\nCases/100k: ${d.cases_per_100k.toFixed(0)}`);
+
+  svg.append("text")
+    .attr("x", width / 2).attr("y", height - 10)
+    .attr("text-anchor", "middle")
+    .text("Vaccination Rate (%)");
+
+  svg.append("text")
+    .attr("x", -height / 2).attr("y", 20)
+    .attr("text-anchor", "middle")
+    .attr("transform", "rotate(-90)")
+    .text("Cases per 100k");
+}
+
+function drawScene3_opt2(data) {
+  // Fit linear regression
+  const X = data.map(d => d.vaccination_rate);
+  const Y = data.map(d => d.cases_per_100k);
+
+  const xMean = d3.mean(X);
+  const yMean = d3.mean(Y);
+  const beta = d3.sum(X.map((x, i) => (x - xMean) * (Y[i] - yMean))) /
+               d3.sum(X.map(x => (x - xMean) ** 2));
+  const alpha = yMean - beta * xMean;
+
+  // Compute residuals
+  data.forEach(d => {
+    d.predicted_cases = alpha + beta * d.vaccination_rate;
+    d.residual = d.cases_per_100k - d.predicted_cases;
+  });
+
+  const x = d3.scaleLinear()
+    .domain(d3.extent(data, d => d.vaccination_rate))
+    .range([margin.left, width - margin.right]);
+
+  const y = d3.scaleLinear()
+    .domain(d3.extent(data, d => d.residual))
+    .nice()
+    .range([height - margin.bottom, margin.top]);
+
+  svg.append("g")
+    .attr("transform", `translate(0,${height - margin.bottom})`)
+    .call(d3.axisBottom(x).tickFormat(d => d + "%"));
+
+  svg.append("g")
+    .attr("transform", `translate(${margin.left},0)`)
+    .call(d3.axisLeft(y));
+
+  svg.append("line") // zero line
+    .attr("x1", margin.left)
+    .attr("x2", width - margin.right)
+    .attr("y1", y(0))
+    .attr("y2", y(0))
+    .attr("stroke", "gray")
+    .attr("stroke-dasharray", "4,2");
+
+  svg.selectAll(".dot")
+    .data(data)
+    .enter()
+    .append("circle")
+    .attr("class", "dot")
+    .attr("cx", d => x(d.vaccination_rate))
+    .attr("cy", d => y(d.residual))
+    .attr("r", 5)
+    .attr("fill", "steelblue")
+    .append("title")
+    .text(d => `${d.state}\nResidual: ${d.residual.toFixed(1)}`);
+
+  svg.append("text")
+    .attr("x", width / 2)
+    .attr("y", height - 10)
+    .attr("text-anchor", "middle")
+    .text("Vaccination Rate (%)");
+
+  svg.append("text")
+    .attr("x", -height / 2)
+    .attr("y", 20)
+    .attr("text-anchor", "middle")
+    .attr("transform", "rotate(-90)")
+    .text("Residual (Actual - Predicted Cases per 100k)");
 }
