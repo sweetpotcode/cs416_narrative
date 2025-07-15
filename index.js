@@ -27,6 +27,28 @@ Promise.all([
   })
 ]).then(([covid, population, abbrev, vaccination]) => {
   vaccination = vaccination.filter(d => d !== null);
+
+  // 1. Preprocess brand % map: { "state_code" -> { Pfizer: 40, Moderna: 50, Janssen: 9 } }
+  const brandPctMap = {};
+
+  const latestByState = d3.rollups(
+    vaccination,
+    v => v.at(-1),
+    d => d.state_code
+  );
+
+  latestByState.forEach(([stateCode, row]) => {
+    const total = +row.Series_Complete_Yes;
+    if (!total || total === 0) return;
+
+    brandPctMap[stateCode] = {
+      Pfizer: 100 * (+row.Series_Complete_Pfizer || 0) / total,
+      Moderna: 100 * (+row.Series_Complete_Moderna || 0) / total,
+      Janssen: 100 * (+row.Series_Complete_Janssen || 0) / total,
+      Novavax: 100 * (+row.Series_Complete_Novavax || 0) / total
+    };
+  });
+
   //vaccination.sort((a, b) => a.date - b.date);
   /*
   console.log("📁 covid rows:", covid.length, "Sample:", covid[0]);
@@ -48,7 +70,7 @@ Promise.all([
     if (d.SUMLEV === 40) popMap[d.STNAME] = d.POPESTIMATE2019;
   });
 
-  //console.log("popMap:", popMap);
+  console.log("popMap:", popMap);
 
   // Preprocess abbrev
   const abbrevMap = {};
@@ -62,7 +84,8 @@ Promise.all([
   //const vaxStart = new Date("2021-01-01");
   //covid = covid.filter(d => d.date >= vaxStart);
 
-  // Merge COVID and population
+  // 20250714 old Merge COVID and population
+  /*
   covid.forEach(d => {
     d.population = popMap[d.state];
     d.cases_per_100k = d.cases / d.population * 100000;
@@ -93,6 +116,39 @@ Promise.all([
   });
 
   allData = covid.filter(d => d.vaccination_rate != null);
+  /** */
+
+  // 20250714 new Merge COVID, population, and vaccination metrics
+  /** */
+  covid.forEach(d => {
+    d.population = popMap[d.state];
+    d.cases_per_100k = d.cases / d.population * 100000;
+    d.deaths_per_100k = d.deaths / d.population * 100000;
+    d.state_code = abbrevMap[d.state];
+    d.date = new Date(d.date);
+
+    // Add age-group completion %
+    const latest = latestByState.find(([code]) => code === d.state_code)?.[1];
+    if (latest) {
+      d.vax18 = +latest.Series_Complete_18PlusPop_Pct || null;
+      d.vax65 = +latest.Series_Complete_65PlusPop_Pct || null;
+    }
+  });
+
+  // Map vax rate by date + state_code
+  const vacMap = {};
+  vaccination.forEach(d => {
+    const key = `${d.date.toISOString().split("T")[0]}|${d.state_code}`;
+    vacMap[key] = +d.vaccination_rate;
+  });
+
+  covid.forEach(d => {
+    const key = `${d.date.toISOString().split("T")[0]}|${d.state_code}`;
+    d.vaccination_rate = vacMap[key] || null;
+  });
+
+  allData = covid.filter(d => d.vaccination_rate != null);
+  /** */
 
   //console.log("allData:", allData);
 
@@ -153,9 +209,9 @@ function updateScene() {
     .map(d => d[1])
     .filter(d => d.vaccination_rate != null);
 
-  console.log("✅ Filtered data for year:", year);
-  console.log("✅ Plotting this many points:", latest.length);
-  console.log("Sample row:", latest[0]);
+  //console.log("✅ Filtered data for year:", year);
+  //console.log("✅ Plotting this many points:", latest.length);
+  //console.log("Sample row:", latest[0]);
 
   gotoScene(currentScene, latest);
 }
@@ -223,17 +279,6 @@ function drawScene1(data) {
     .attr("transform", `translate(${margin.left},0)`)
     .call(d3.axisLeft(y));
 
-  /*
-  svg.selectAll("rect")
-    .data(barData)
-    .enter()
-    .append("rect")
-    .attr("x", d => x(d.group))
-    .attr("y", d => y(d.avg))
-    .attr("width", x.bandwidth())
-    .attr("height", d => y(0) - y(d.avg))
-    .attr("fill", d => groupColors[d.group]);
-  /* */
   var trans_time = 800 //ms
   var draw_delay = 1000 //ms
 
@@ -252,7 +297,6 @@ function drawScene1(data) {
   .attr("y", d => y(d.avg))
   .attr("height", d => y(0) - y(d.avg));
 
-
   svg.append("text")
     .attr("x", width / 2).attr("y", height - 10)
     .attr("text-anchor", "middle")
@@ -264,31 +308,6 @@ function drawScene1(data) {
     .attr("transform", "rotate(-90)")
     .text("Avg Deaths per 100k");
 
-  /*
-  setTimeout(() => {
-    svg.append("text")
-      .attr("x", width / 2)
-      .attr("y", margin.top - 10)
-      .attr("text-anchor", "middle")
-      .attr("font-size", "16px")
-      .attr("fill", "gray")
-      .style("opacity", 0)
-      .text("Higher vaccination levels are associated with lower average death rates.")
-      .transition()
-      .duration(trans_time)
-      .style("opacity", 1);
-  }, 3000);
-
-  setTimeout(() => {
-    setTimeout(() => {
-      d3.select("#next-hint")
-        .text("◀ Click to explore: State-level deaths vs. cases")
-        .transition()
-        .duration(trans_time)
-        .style("opacity", 1);
-    }, 1000);
-  }, 3000); // outer delay: bar animation duration
-  /* */
   // annotation text
   pendingTimeouts.push(setTimeout(() => {
     svg.append("text")
@@ -314,7 +333,7 @@ function drawScene1(data) {
         .duration(trans_time)
         .style("opacity", 1);
     }, 1000));
-  }, 3000));
+  }, 3000)); // outer delay: bar animation duration
 }
 
 function drawScene2(data, withAnnotation = false) {
@@ -508,72 +527,4 @@ function drawScene3(data) {
     .attr("text-anchor", "middle")
     .attr("transform", "rotate(-90)")
     .text("Cases per 100k");
-}
-
-function drawScene3_opt2(data) {
-  // Fit linear regression
-  const X = data.map(d => d.vaccination_rate);
-  const Y = data.map(d => d.cases_per_100k);
-
-  const xMean = d3.mean(X);
-  const yMean = d3.mean(Y);
-  const beta = d3.sum(X.map((x, i) => (x - xMean) * (Y[i] - yMean))) /
-               d3.sum(X.map(x => (x - xMean) ** 2));
-  const alpha = yMean - beta * xMean;
-
-  // Compute residuals
-  data.forEach(d => {
-    d.predicted_cases = alpha + beta * d.vaccination_rate;
-    d.residual = d.cases_per_100k - d.predicted_cases;
-  });
-
-  const x = d3.scaleLinear()
-    .domain(d3.extent(data, d => d.vaccination_rate))
-    .range([margin.left, width - margin.right]);
-
-  const y = d3.scaleLinear()
-    .domain(d3.extent(data, d => d.residual))
-    .nice()
-    .range([height - margin.bottom, margin.top]);
-
-  svg.append("g")
-    .attr("transform", `translate(0,${height - margin.bottom})`)
-    .call(d3.axisBottom(x).tickFormat(d => d + "%"));
-
-  svg.append("g")
-    .attr("transform", `translate(${margin.left},0)`)
-    .call(d3.axisLeft(y));
-
-  svg.append("line") // zero line
-    .attr("x1", margin.left)
-    .attr("x2", width - margin.right)
-    .attr("y1", y(0))
-    .attr("y2", y(0))
-    .attr("stroke", "gray")
-    .attr("stroke-dasharray", "4,2");
-
-  svg.selectAll(".dot")
-    .data(data)
-    .enter()
-    .append("circle")
-    .attr("class", "dot")
-    .attr("cx", d => x(d.vaccination_rate))
-    .attr("cy", d => y(d.residual))
-    .attr("r", 5)
-    .attr("fill", "steelblue")
-    .append("title")
-    .text(d => `${d.state}\nResidual: ${d.residual.toFixed(1)}`);
-
-  svg.append("text")
-    .attr("x", width / 2)
-    .attr("y", height - 10)
-    .attr("text-anchor", "middle")
-    .text("Vaccination Rate (%)");
-
-  svg.append("text")
-    .attr("x", -height / 2)
-    .attr("y", 20)
-    .attr("text-anchor", "middle")
-    .attr("transform", "rotate(-90)")
-    .text("Residual (Actual - Predicted Cases per 100k)");
 }
