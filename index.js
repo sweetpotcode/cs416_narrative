@@ -1,12 +1,15 @@
+//index.js
 // Globals
 let currentScene = 0;
 let allData = [];
+let vaccination = [];
 let yearList = [];
 const width = 900, height = 600;
 const svg = d3.select("#chart");
 const margin = { top: 40, right: 30, bottom: 50, left: 60 };
 let pendingTimeouts = [];
 let regressionModel; // store model to avoid recomputing if needed
+let brandPctMap = {};  // vaccine brand % map
 
 
 // Load all CSVs and and bring up all visuals
@@ -16,40 +19,21 @@ Promise.all([
   d3.csv("data/state_abbrev.csv"),
   d3.csv("data/COVID-19_Vaccinations_in_the_United_States_Jurisdiction_20250616.csv", d => {
     const parsedDate = new Date(d.Date);
-    return parsedDate instanceof Date && !isNaN(parsedDate)
-      ? {
-          ...d,
-          date: parsedDate,
-          vaccination_rate: +d.Administered_Dose1_Pop_Pct || 0,
-          state_code: d.Location
-        }
-      : null;
-  })
-]).then(([covid, population, abbrev, vaccination]) => {
-  vaccination = vaccination.filter(d => d !== null);
+    if (!(parsedDate instanceof Date) || isNaN(parsedDate)) return null;
 
-  // 1. Preprocess brand % map: { "state_code" -> { Pfizer: 40, Moderna: 50, Janssen: 9 } }
-  const brandPctMap = {};
-
-  const latestByState = d3.rollups(
-    vaccination,
-    v => v.at(-1),
-    d => d.state_code
-  );
-
-  latestByState.forEach(([stateCode, row]) => {
-    const total = +row.Series_Complete_Yes;
-    if (!total || total === 0) return;
-
-    brandPctMap[stateCode] = {
-      Pfizer: 100 * (+row.Series_Complete_Pfizer || 0) / total,
-      Moderna: 100 * (+row.Series_Complete_Moderna || 0) / total,
-      Janssen: 100 * (+row.Series_Complete_Janssen || 0) / total,
-      Novavax: 100 * (+row.Series_Complete_Novavax || 0) / total
+    const result = {
+      ...d,
+      date: parsedDate,
+      vaccination_rate: +d.Administered_Dose1_Pop_Pct || 0,
+      state_code: d.Location
     };
-  });
 
-  //vaccination.sort((a, b) => a.date - b.date);
+    return result;
+  })
+]).then(([covid, population, abbrev, vaxData]) => {
+  vaccination = vaxData.filter(d => d !== null && d.date.getFullYear() >= 2021);
+  vaccination.sort((a, b) => a.date - b.date);
+
   /*
   console.log("📁 covid rows:", covid.length, "Sample:", covid[0]);
   console.log("📁 population rows:", population.length, "Sample:", population[0]);
@@ -70,7 +54,7 @@ Promise.all([
     if (d.SUMLEV === 40) popMap[d.STNAME] = d.POPESTIMATE2019;
   });
 
-  console.log("popMap:", popMap);
+  //console.log("popMap:", popMap);
 
   // Preprocess abbrev
   const abbrevMap = {};
@@ -79,44 +63,6 @@ Promise.all([
   });
 
   //console.log("abbrevMap:", abbrevMap);
-
-  //0710 align date range
-  //const vaxStart = new Date("2021-01-01");
-  //covid = covid.filter(d => d.date >= vaxStart);
-
-  // 20250714 old Merge COVID and population
-  /*
-  covid.forEach(d => {
-    d.population = popMap[d.state];
-    d.cases_per_100k = d.cases / d.population * 100000;
-    d.deaths_per_100k = d.deaths / d.population * 100000;
-    d.state_code = abbrevMap[d.state];
-    d.date = new Date(d.date);
-    //Don 0710: debug blank load
-    //const parsedDate = new Date(d.date);
-    //date = parsedDate instanceof Date && !isNaN(parsedDate) ? parsedDate : null;
-  });
-
-  //to align data range to join
-  //const vaxStart = new Date("2021-01-01");
-  //covid = covid.filter(d => d.date >= vaxStart);
-
-  // Merge vaccination by date + state_code
-  const vacMap = {};
-  vaccination.forEach(d => {
-    const key = `${d.date.toISOString().split("T")[0]}|${d.state_code}`;
-    vacMap[key] = d.vaccination_rate = +d.vaccination_rate;
-  });
-
-  //console.log("vacMap:", vacMap);
-
-  covid.forEach(d => {
-    const key = `${d.date.toISOString().split("T")[0]}|${d.state_code}`;
-    d.vaccination_rate = vacMap[key] || null;
-  });
-
-  allData = covid.filter(d => d.vaccination_rate != null);
-  /** */
 
   // 20250714 new Merge COVID, population, and vaccination metrics
   /** */
@@ -128,12 +74,17 @@ Promise.all([
     d.date = new Date(d.date);
 
     // Add age-group completion %
+    //20250715 debug
+    /**
     const latest = latestByState.find(([code]) => code === d.state_code)?.[1];
     if (latest) {
       d.vax18 = +latest.Series_Complete_18PlusPop_Pct || null;
       d.vax65 = +latest.Series_Complete_65PlusPop_Pct || null;
     }
+    /** */
   });
+
+  //console.log("🔍 covid sample with vax fields:", covid.find(d => d.state === "California"));
 
   // Map vax rate by date + state_code
   const vacMap = {};
@@ -186,6 +137,7 @@ function updateScene() {
   d3.select("#next-hint").text("").style("opacity", 0);
   
   const year = +d3.select("#year-select").property("value") || d3.max(yearList);
+
   const sceneText = [
     "Scene 1: Overview - Average Deaths per Vaccination Group",
     "Scene 2: Deaths vs Cases for each state grouped by Vaccination Level",
@@ -193,26 +145,74 @@ function updateScene() {
   ];
   d3.select("#scene-description").text(sceneText[currentScene]);
 
-  // Clear SVG
+  // Clear SVG (pending timeouts, hint and annotation)
   svg.selectAll("*").remove();
-
-  // Cancel any pending timeouts
   pendingTimeouts.forEach(clearTimeout);
   pendingTimeouts = [];
-
-  // Remove hint and annotation text immediately
-  d3.select("#next-hint").text("").style("opacity", 0);
+  //d3.select("#next-hint").text("").style("opacity", 0);
   svg.selectAll(".scene-hint").remove();  // class to mark scene-specific annotations
 
   const filtered = allData.filter(d => d.date.getFullYear() === year);
-  const latest = d3.rollups(filtered, v => v.at(-1), d => d.state)
+
+  //20250715: debug latest week data issue
+  //const latest = d3.rollups(filtered, v => v.at(-1), d => d.state)
+  const latest = d3.rollups(filtered, v => {
+    // Sort by date descending (latest first)
+    v.sort((a, b) => b.date - a.date);
+    // Prefer the most recent one with vax data
+    return v.find(row => row.vax18 != null && row.vax65 != null) || v[0];
+  }, d => d.state)
     .map(d => d[1])
     .filter(d => d.vaccination_rate != null);
 
-  //console.log("✅ Filtered data for year:", year);
-  //console.log("✅ Plotting this many points:", latest.length);
-  //console.log("Sample row:", latest[0]);
+  /*
+  latest.forEach(d => {
+    const vaxRow = vaccination.find(v => 
+      v.state_code === d.state_code && v.date.getFullYear() === year
+    );
 
+    if (vaxRow) {
+      d.vax18 = +vaxRow.Series_Complete_18PlusPop_Pct || null;
+      d.vax65 = +vaxRow.Series_Complete_65PlusPop_Pct || null;
+    } else {
+      d.vax18 = null;
+      d.vax65 = null;
+    }
+  });
+  */
+  latest.forEach(d => {
+    const yearVaxRows = vaccination
+      .filter(v => v.state_code === d.state_code && v.date.getFullYear() === year)
+      .sort((a, b) => b.date - a.date);  // latest first
+
+    const bestRow = yearVaxRows.find(v =>
+      +v.Series_Complete_18PlusPop_Pct > 0 && +v.Series_Complete_65PlusPop_Pct > 0
+    );
+
+    d.vax18 = bestRow ? +bestRow.Series_Complete_18PlusPop_Pct : null;
+    d.vax65 = bestRow ? +bestRow.Series_Complete_65PlusPop_Pct : null;
+  });
+
+  // Step 4: Rebuild brandPctMap based on selected year
+  brandPctMap = {};
+  const yearVax = vaccination.filter(d => d.date.getFullYear() === year);
+  const latestBrandRow = d3.rollups(
+    yearVax,
+    v => v.at(-1),
+    d => d.state_code
+  );
+
+  latestBrandRow.forEach(([stateCode, row]) => {
+    const total = +row.Series_Complete_Yes;
+    if (!total || total === 0) return;
+
+    brandPctMap[stateCode] = {
+      Pfizer: 100 * (+row.Series_Complete_Pfizer || 0) / total,
+      Moderna: 100 * (+row.Series_Complete_Moderna || 0) / total,
+      Janssen: 100 * (+row.Series_Complete_Janssen || 0) / total,
+      Novavax: 100 * (+row.Series_Complete_Novavax || 0) / total
+    };
+  });
   gotoScene(currentScene, latest);
 }
 
@@ -369,6 +369,21 @@ function drawScene2(data, withAnnotation = false) {
     .attr("transform", `translate(${margin.left},0)`)
     .call(d3.axisLeft(y));
 
+  const xMedian = d3.median(data, d => d.cases_per_100k);
+  const yMedian = d3.median(data, d => d.deaths_per_100k);
+
+  // Vertical line for avg cases
+  svg.append("line")
+    .attr("x1", x(xMedian)).attr("x2", x(xMedian))
+    .attr("y1", margin.top).attr("y2", height - margin.bottom)
+    .attr("stroke", "gray").attr("stroke-dasharray", "4 4").lower();
+
+  // Horizontal line for avg deaths
+  svg.append("line")
+    .attr("x1", margin.left).attr("x2", width - margin.right)
+    .attr("y1", y(yMedian)).attr("y2", y(yMedian))
+    .attr("stroke", "gray").attr("stroke-dasharray", "4 4").lower();
+
   const legend = svg.append("g")
     .attr("class", "legend-box")
     .attr("transform", `translate(${width - 200}, ${margin.top})`);  // shift left for more space
@@ -437,11 +452,13 @@ function drawScene2(data, withAnnotation = false) {
     return d3.symbolCircle;
   }).size(100);
 
+  //20250715 new tooltip
   function updateFilteredDots() {
     svg.selectAll(".data-dot").remove();
 
     const filtered = data.filter(d => activeGroups.has(d.vax_group));
 
+    //console.log("updateFilteredDots in")
     svg.selectAll(".data-dot")
       .data(filtered)
       .enter()
@@ -452,7 +469,39 @@ function drawScene2(data, withAnnotation = false) {
       .attr("fill", d => groupColors[d.vax_group] || "gray")
       .attr("opacity", 0.8)
       .append("title")
-      .text(d => `${d.state}: ${d.vax_group}\nCases/100k: ${d.cases_per_100k.toFixed(0)}\nDeaths/100k: ${d.deaths_per_100k.toFixed(1)}`);
+      .text(d => {
+        const lines = [];
+
+        lines.push(`${d.state}`);
+        lines.push(`Deaths/100k: ${d.deaths_per_100k.toFixed(1)}`);
+        lines.push(`Cases/100k: ${d.cases_per_100k.toFixed(0)}`);
+
+        //console.log("18+", d.vax18)
+        if (d.vax18 != null) {
+          lines.push(`18+ Complete: ${d.vax18.toFixed(1)}%`);
+        }
+        //console.log("65+", d.vax65)
+        if (d.vax65 != null) {
+          lines.push(`65+ Complete: ${d.vax65.toFixed(1)}%`);
+        }
+
+        const brandPct = brandPctMap[d.state_code];
+        //console.log("d.state_code",d.state_code)
+        //console.log("brandPct",brandPct)
+        if (brandPct) {
+          const brandEntries = Object.entries(brandPct)
+            .filter(([_, pct]) => pct > 25 || pct > 60)
+            .sort((a, b) => b[1] - a[1])
+            .map(([brand, pct]) => `${brand}: ${pct.toFixed(1)}%`);
+
+          if (brandEntries.length > 0) {
+            lines.push("Main Vaccine(s):");
+            lines.push(...brandEntries.slice(0, 2)); // up to 2
+          }
+        }
+        return lines.join("\n");
+        });
+    //console.log("updateFilteredDots out")
   }
 
   updateFilteredDots();
