@@ -538,9 +538,16 @@ function drawScene3(data) {
     "Below Mean (<68%)": "red"
   };
 
+  /*
   const x = d3.scaleLinear()
     .domain([60, 90])  // assuming vaccination rate range
     .range([margin.left, width - margin.right]);
+  */
+  const xExtent = d3.extent(data, d => d.vaccination_rate);
+  const x = d3.scaleLinear()
+    .domain([xExtent[0] * 0.98, xExtent[1] * 1.02])  // add slight margin
+    .range([margin.left, width - margin.right]);
+
 
   const y = d3.scaleLinear()
     .domain([0, d3.max(data, d => d.cases_per_100k)]).nice()
