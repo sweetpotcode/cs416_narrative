@@ -584,3 +584,116 @@ function drawScene3(data) {
     .attr("transform", "rotate(-90)")
     .text("Cases per 100k");
 }
+
+//consistent looks for Scene 2 and Scene 3
+function getShape(d) {
+  if (d.vax_group === "Above 1 S.D. (78%+)") return d3.symbolStar;
+  if (d.vax_group === "Above Mean (68%-78%)") return d3.symbolTriangle;
+  return d3.symbolCircle;
+}
+
+function drawLegendBox(svg, groupColors, activeGroups, updateFn) {
+  const legendGroups = [
+    { label: "Above 1 S.D. (78%+)", color: "green", shape: d3.symbolStar },
+    { label: "Above Mean (68%-78%)", color: "gold", shape: d3.symbolTriangle },
+    { label: "Below Mean (<68%)", color: "red", shape: d3.symbolCircle }
+  ];
+
+  const legend = svg.append("g")
+    .attr("class", "legend-box")
+    .attr("transform", `translate(${width - 200}, ${margin.top})`);
+
+  legend.append("text")
+    .attr("x", 0)
+    .attr("y", -25)
+    .attr("font-weight", "bold")
+    .attr("font-size", "12px")
+    .call(text => {
+      text.append("tspan").attr("x", 0).attr("dy", "1em").text("Filter by Vaccination Level");
+      text.append("tspan").attr("x", 0).attr("dy", "1em").text("(click labels below)");
+    });
+
+  const legendItems = legend.selectAll(".legend-item")
+    .data(legendGroups)
+    .enter()
+    .append("g")
+    .attr("class", "legend-item")
+    .attr("transform", (_, i) => `translate(0, ${i * 30 + 20})`)
+    .style("cursor", "pointer")
+    .on("click", (event, d) => {
+      if (activeGroups.has(d.label)) {
+        activeGroups.delete(d.label);
+      } else {
+        activeGroups.add(d.label);
+      }
+      updateFn();
+    });
+
+  legendItems.append("path")
+    .attr("transform", "translate(0, 0)")
+    .attr("d", d => d3.symbol().type(d.shape).size(100)())
+    .attr("fill", d => d.color)
+    .attr("stroke", "black");
+
+  legendItems.append("text")
+    .attr("x", 20)
+    .attr("y", 5)
+    .attr("font-size", "12px")
+    .attr("fill", "#0645AD")
+    .style("text-decoration", "underline")
+    .text(d => d.label);
+
+  setTimeout(() => {
+    const bbox = legend.node().getBBox();
+    legend.insert("rect", ":first-child")
+      .attr("x", bbox.x - 10)
+      .attr("y", bbox.y - 10)
+      .attr("width", bbox.width + 40)
+      .attr("height", bbox.height + 20)
+      .attr("fill", "#f9f9f9")
+      .attr("stroke", "#ccc")
+      .attr("rx", 6)
+      .attr("ry", 6);
+  }, 0);
+}
+
+function updateFilteredDots(svg, data, x, y, shaped_dots, groupColors, activeGroups) {
+  svg.selectAll(".data-dot").remove();
+
+  const filtered = data.filter(d => activeGroups.has(d.vax_group));
+
+  svg.selectAll(".data-dot")
+    .data(filtered)
+    .enter()
+    .append("path")
+    .attr("class", "data-dot")
+    .attr("d", shaped_dots)
+    .attr("transform", d => `translate(${x(d.cases_per_100k)},${y(d.deaths_per_100k)})`)
+    .attr("fill", d => groupColors[d.vax_group] || "gray")
+    .attr("opacity", 0.8)
+    .append("title")
+    .text(d => {
+      const lines = [];
+      lines.push(`${d.state}`);
+      lines.push(`Deaths/100k: ${d.deaths_per_100k.toFixed(1)}`);
+      lines.push(`Cases/100k: ${d.cases_per_100k.toFixed(0)}`);
+
+      if (d.vax18 != null) lines.push(`18+ Complete: ${d.vax18.toFixed(1)}%`);
+      if (d.vax65 != null) lines.push(`65+ Complete: ${d.vax65.toFixed(1)}%`);
+
+      const brandPct = brandPctMap[d.state_code];
+      if (brandPct) {
+        const brandEntries = Object.entries(brandPct)
+          .filter(([_, pct]) => pct > 25 || pct > 60)
+          .sort((a, b) => b[1] - a[1])
+          .map(([brand, pct]) => `${brand}: ${pct.toFixed(1)}%`);
+
+        if (brandEntries.length > 0) {
+          lines.push("Main Vaccine(s):");
+          lines.push(...brandEntries.slice(0, 2));
+        }
+      }
+
+      return lines.join("\n");
+    });
+}
