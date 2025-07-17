@@ -11,6 +11,14 @@ let pendingTimeouts = [];
 let regressionModel; // store model to avoid recomputing if needed
 let brandPctMap = {};  // vaccine brand % map
 
+//legends and colors to be used consistently among scenes
+const vaxGroups = [
+  { label: "Below Mean (<68%)", color: "red", shape: d3.symbolCircle },
+  { label: "Above Mean (68%-78%)", color: "gold", shape: d3.symbolTriangle },
+  { label: "Above 1 S.D. (78%+)", color: "green", shape: d3.symbolStar }
+];
+
+const groupColors = Object.fromEntries(vaxGroups.map(g => [g.label, g.color]));
 
 // Load all CSVs and and bring up all visuals
 Promise.all([
@@ -64,24 +72,12 @@ Promise.all([
 
   //console.log("abbrevMap:", abbrevMap);
 
-  // 20250714 new Merge COVID, population, and vaccination metrics
-  /** */
   covid.forEach(d => {
     d.population = popMap[d.state];
     d.cases_per_100k = d.cases / d.population * 100000;
     d.deaths_per_100k = d.deaths / d.population * 100000;
     d.state_code = abbrevMap[d.state];
     d.date = new Date(d.date);
-
-    // Add age-group completion %
-    //20250715 debug
-    /**
-    const latest = latestByState.find(([code]) => code === d.state_code)?.[1];
-    if (latest) {
-      d.vax18 = +latest.Series_Complete_18PlusPop_Pct || null;
-      d.vax65 = +latest.Series_Complete_65PlusPop_Pct || null;
-    }
-    /** */
   });
 
   //console.log("🔍 covid sample with vax fields:", covid.find(d => d.state === "California"));
@@ -99,7 +95,6 @@ Promise.all([
   });
 
   allData = covid.filter(d => d.vaccination_rate != null);
-  /** */
 
   //console.log("allData:", allData);
 
@@ -165,21 +160,6 @@ function updateScene() {
     .map(d => d[1])
     .filter(d => d.vaccination_rate != null);
 
-  /*
-  latest.forEach(d => {
-    const vaxRow = vaccination.find(v => 
-      v.state_code === d.state_code && v.date.getFullYear() === year
-    );
-
-    if (vaxRow) {
-      d.vax18 = +vaxRow.Series_Complete_18PlusPop_Pct || null;
-      d.vax65 = +vaxRow.Series_Complete_65PlusPop_Pct || null;
-    } else {
-      d.vax18 = null;
-      d.vax65 = null;
-    }
-  });
-  */
   latest.forEach(d => {
     const yearVaxRows = vaccination
       .filter(v => v.state_code === d.state_code && v.date.getFullYear() === year)
@@ -193,7 +173,7 @@ function updateScene() {
     d.vax65 = bestRow ? +bestRow.Series_Complete_65PlusPop_Pct : null;
   });
 
-  // Step 4: Rebuild brandPctMap based on selected year
+  //vaccine brands based on selected year
   brandPctMap = {};
   const yearVax = vaccination.filter(d => d.date.getFullYear() === year);
   const latestBrandRow = d3.rollups(
@@ -237,18 +217,7 @@ function gotoScene(scene, data) {
 
 //Overall Death vs vaccination level
 function drawScene1(data) {
-  const groupColors = {
-    "Above 1 S.D. (78%+)": "green",
-    "Above Mean (68%-78%)": "gold",
-    "Below Mean (<68%)": "red"
-  };
-
-  // Enforce group display order
-  const groupOrder = [
-    "Below Mean (<68%)",
-    "Above Mean (68%-78%)",
-    "Above 1 S.D. (78%+)"
-  ];
+  const groupOrder = vaxGroups.map(g => g.label);
 
   // Compute mean deaths per group
   const groupedMap = d3.rollup(
@@ -337,12 +306,6 @@ function drawScene1(data) {
 }
 
 function drawScene2(data, withAnnotation = false) {
-  const groupColors = {
-    "Above 1 S.D. (78%+)": "green",
-    "Above Mean (68%-78%)": "gold",
-    "Below Mean (<68%)": "red"
-  };
-
   const xExtent = d3.extent(data, d => d.cases_per_100k);
   const yExtent = d3.extent(data, d => d.deaths_per_100k);
 
@@ -353,14 +316,6 @@ function drawScene2(data, withAnnotation = false) {
   const y = d3.scaleLinear()
     .domain([yExtent[0] * 0.95, yExtent[1] * 1.05])
     .range([height - margin.bottom, margin.top]);
-
-  const legendGroups = [
-    { label: "Above 1 S.D. (78%+)", color: "green", shape: d3.symbolStar },
-    { label: "Above Mean (68%-78%)", color: "gold", shape: d3.symbolTriangle },
-    { label: "Below Mean (<68%)", color: "red", shape: d3.symbolCircle }
-  ];
-
-  let activeGroups = new Set(legendGroups.map(g => g.label));
 
   svg.append("g")
     .attr("transform", `translate(0,${height - margin.bottom})`)
@@ -384,127 +339,15 @@ function drawScene2(data, withAnnotation = false) {
     .attr("y1", y(yMedian)).attr("y2", y(yMedian))
     .attr("stroke", "gray").attr("stroke-dasharray", "4 4").lower();
 
-  const legend = svg.append("g")
-    .attr("class", "legend-box")
-    .attr("transform", `translate(${width - 200}, ${margin.top})`);  // shift left for more space
+  //legend box and tooltip
+  const shaped_dots = d3.symbol().type(getShape).size(100);
 
-  // Title with better wording
-  legend.append("text")
-    .attr("x", 0)
-    .attr("y", -25)
-    .attr("font-weight", "bold")
-    .attr("font-size", "12px")
-    .text("")
-    .call(text => {
-      text.append("tspan").attr("x", 0).attr("dy", "1em").text("Filter by Vaccination Level");
-      text.append("tspan").attr("x", 0).attr("dy", "1em").text("(click labels below)");
-    });
+  const activeGroups = new Set(vaxGroups.map(g => g.label));
+  drawLegendBox(svg, groupColors, activeGroups, () => {
+    updateFilteredDots(svg, data, x, y, shaped_dots, groupColors, activeGroups, "scene2");
+  });
 
-  // Group container
-  const legendItems = legend.selectAll(".legend-item")
-    .data(legendGroups)
-    .enter()
-    .append("g")
-    .attr("class", "legend-item")
-    .attr("transform", (_, i) => `translate(0, ${i * 30 + 20})`)  // more vertical spacing
-    .style("cursor", "pointer")
-    .on("click", (event, d) => {
-      if (activeGroups.has(d.label)) {
-        activeGroups.delete(d.label);
-      } else {
-        activeGroups.add(d.label);
-      }
-      updateFilteredDots();
-    });
-
-  //addshaped dots
-  legendItems.append("path")
-    .attr("transform", "translate(0, 0)")
-    .attr("d", d => d3.symbol().type(d.shape).size(100)())
-    .attr("fill", d => d.color)
-    .attr("stroke", "black");
-
-  // Labels with hyperlink style
-  legendItems.append("text")
-    .attr("x", 20)
-    .attr("y", 5)
-    .attr("font-size", "12px")
-    .attr("fill", "#0645AD") // hyperlink blue
-    .style("text-decoration", "underline")
-    .text(d => d.label);
-
-  setTimeout(() => {
-    const bbox = legend.node().getBBox();
-    legend.insert("rect", ":first-child")
-      .attr("x", bbox.x - 10)
-      .attr("y", bbox.y - 10)
-      .attr("width", bbox.width + 40)
-      .attr("height", bbox.height + 20)
-      .attr("fill", "#f9f9f9")
-      .attr("stroke", "#ccc")
-      .attr("rx", 6)
-      .attr("ry", 6);
-  }, 0);
-
-  const shaped_dots = d3.symbol().type(d => {
-    if (d.vax_group === "Above 1 S.D. (78%+)") return d3.symbolStar;
-    if (d.vax_group === "Above Mean (68%-78%)") return d3.symbolTriangle;
-    return d3.symbolCircle;
-  }).size(100);
-
-  //20250715 new tooltip
-  function updateFilteredDots() {
-    svg.selectAll(".data-dot").remove();
-
-    const filtered = data.filter(d => activeGroups.has(d.vax_group));
-
-    //console.log("updateFilteredDots in")
-    svg.selectAll(".data-dot")
-      .data(filtered)
-      .enter()
-      .append("path")
-      .attr("class", "data-dot")
-      .attr("d", shaped_dots)
-      .attr("transform", d => `translate(${x(d.cases_per_100k)},${y(d.deaths_per_100k)})`)
-      .attr("fill", d => groupColors[d.vax_group] || "gray")
-      .attr("opacity", 0.8)
-      .append("title")
-      .text(d => {
-        const lines = [];
-
-        lines.push(`${d.state}`);
-        lines.push(`Deaths/100k: ${d.deaths_per_100k.toFixed(1)}`);
-        lines.push(`Cases/100k: ${d.cases_per_100k.toFixed(0)}`);
-
-        //console.log("18+", d.vax18)
-        if (d.vax18 != null) {
-          lines.push(`18+ Complete: ${d.vax18.toFixed(1)}%`);
-        }
-        //console.log("65+", d.vax65)
-        if (d.vax65 != null) {
-          lines.push(`65+ Complete: ${d.vax65.toFixed(1)}%`);
-        }
-
-        const brandPct = brandPctMap[d.state_code];
-        //console.log("d.state_code",d.state_code)
-        //console.log("brandPct",brandPct)
-        if (brandPct) {
-          const brandEntries = Object.entries(brandPct)
-            .filter(([_, pct]) => pct > 25 || pct > 60)
-            .sort((a, b) => b[1] - a[1])
-            .map(([brand, pct]) => `${brand}: ${pct.toFixed(1)}%`);
-
-          if (brandEntries.length > 0) {
-            lines.push("Main Vaccine(s):");
-            lines.push(...brandEntries.slice(0, 2)); // up to 2
-          }
-        }
-        return lines.join("\n");
-        });
-    //console.log("updateFilteredDots out")
-  }
-
-  updateFilteredDots();
+  updateFilteredDots(svg, data, x, y, shaped_dots, groupColors, activeGroups, "scene2");
 
   svg.append("text")
     .attr("x", width / 2).attr("y", height - 10)
@@ -532,22 +375,10 @@ function drawScene2(data, withAnnotation = false) {
 }
 
 function drawScene3(data) {
-  const groupColors = {
-    "Above 1 S.D. (78%+)": "green",
-    "Above Mean (68%-78%)": "gold",
-    "Below Mean (<68%)": "red"
-  };
-
-  /*
-  const x = d3.scaleLinear()
-    .domain([60, 90])  // assuming vaccination rate range
-    .range([margin.left, width - margin.right]);
-  */
   const xExtent = d3.extent(data, d => d.vaccination_rate);
   const x = d3.scaleLinear()
     .domain([xExtent[0] * 0.98, xExtent[1] * 1.02])  // add slight margin
     .range([margin.left, width - margin.right]);
-
 
   const y = d3.scaleLinear()
     .domain([0, d3.max(data, d => d.cases_per_100k)]).nice()
@@ -561,17 +392,15 @@ function drawScene3(data) {
     .attr("transform", `translate(${margin.left},0)`)
     .call(d3.axisLeft(y));
 
-  svg.selectAll("circle")
-    .data(data)
-    .enter()
-    .append("circle")
-    .attr("cx", d => x(d.vaccination_rate))
-    .attr("cy", d => y(d.cases_per_100k))
-    .attr("r", 6)
-    .attr("fill", d => groupColors[d.vax_group] || "gray")
-    .attr("opacity", 0.8)
-    .append("title")
-    .text(d => `${d.state}: ${d.vax_group}\nVax Rate: ${d.vaccination_rate}%\nCases/100k: ${d.cases_per_100k.toFixed(0)}`);
+  let activeGroups = new Set(["Above 1 S.D. (78%+)", "Above Mean (68%-78%)", "Below Mean (<68%)"]);
+
+  const shaped_dots = d3.symbol().type(getShape).size(100);
+
+  // Draw legend + hook up toggling
+  drawLegendBox(svg, groupColors, activeGroups, () => {
+    updateFilteredDots(svg, data, x, y, shaped_dots, groupColors, activeGroups, "scene3");
+  });
+  updateFilteredDots(svg, data, x, y, shaped_dots, groupColors, activeGroups, "scene3");
 
   svg.append("text")
     .attr("x", width / 2).attr("y", height - 10)
@@ -585,13 +414,13 @@ function drawScene3(data) {
     .text("Cases per 100k");
 }
 
-//consistent looks for Scene 2 and Scene 3
+//shared consistent looks for Scene 2 and Scene 3
 function getShape(d) {
-  if (d.vax_group === "Above 1 S.D. (78%+)") return d3.symbolStar;
-  if (d.vax_group === "Above Mean (68%-78%)") return d3.symbolTriangle;
-  return d3.symbolCircle;
+  const entry = vaxGroups.find(g => g.label === d.vax_group);
+  return entry ? entry.shape : d3.symbolCircle;
 }
 
+//legend box
 function drawLegendBox(svg, groupColors, activeGroups, updateFn) {
   const legendGroups = [
     { label: "Above 1 S.D. (78%+)", color: "green", shape: d3.symbolStar },
@@ -657,7 +486,8 @@ function drawLegendBox(svg, groupColors, activeGroups, updateFn) {
   }, 0);
 }
 
-function updateFilteredDots(svg, data, x, y, shaped_dots, groupColors, activeGroups) {
+//hover 
+function updateFilteredDots(svg, data, x, y, shaped_dots, groupColors, activeGroups, mode = "scene2") {
   svg.selectAll(".data-dot").remove();
 
   const filtered = data.filter(d => activeGroups.has(d.vax_group));
@@ -668,7 +498,11 @@ function updateFilteredDots(svg, data, x, y, shaped_dots, groupColors, activeGro
     .append("path")
     .attr("class", "data-dot")
     .attr("d", shaped_dots)
-    .attr("transform", d => `translate(${x(d.cases_per_100k)},${y(d.deaths_per_100k)})`)
+    .attr("transform", d => {
+      const xVal = mode === "scene3" ? d.vaccination_rate : d.cases_per_100k;
+      const yVal = mode === "scene3" ? d.cases_per_100k : d.deaths_per_100k;
+      return `translate(${x(xVal)},${y(yVal)})`;
+    })
     .attr("fill", d => groupColors[d.vax_group] || "gray")
     .attr("opacity", 0.8)
     .append("title")
@@ -677,6 +511,7 @@ function updateFilteredDots(svg, data, x, y, shaped_dots, groupColors, activeGro
       lines.push(`${d.state}`);
       lines.push(`Deaths/100k: ${d.deaths_per_100k.toFixed(1)}`);
       lines.push(`Cases/100k: ${d.cases_per_100k.toFixed(0)}`);
+      //lines.push(`Vax Rate: ${d.vaccination_rate.toFixed(1)}%`);
 
       if (d.vax18 != null) lines.push(`18+ Complete: ${d.vax18.toFixed(1)}%`);
       if (d.vax65 != null) lines.push(`65+ Complete: ${d.vax65.toFixed(1)}%`);
