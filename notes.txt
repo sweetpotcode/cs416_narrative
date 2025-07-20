@@ -1,2 +1,25 @@
 #dev webserver, cd to root dir:
 python -m http.server 8000
+
+
+Here's how to publish cs416_narrative on GitHub Pages
+
+    Go to your repo:
+
+        https://github.com/YOUR_USERNAME/cs416_narrative
+
+    Click “Settings” → “Pages” (in the sidebar)
+
+    Under “GitHub Pages” section:
+
+        Source: Choose main (or your default branch)
+
+        Folder: Choose / (root) (not /docs)
+
+        Click Save
+
+    After a few seconds, GitHub will give you a URL like:
+
+        https://YOUR_USERNAME.github.io/cs416_narrative/
+        
+        
