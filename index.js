@@ -130,7 +130,11 @@ function attachButtonEvents() {
 
 function updateScene() {
   d3.select("#next-hint").text("").style("opacity", 0);
-  
+
+  // Disable/enable navigation buttons based on scene
+  d3.select("#prev-btn").attr("disabled", currentScene === 0 ? true : null);
+  d3.select("#next-btn").attr("disabled", currentScene === 2 ? true : null);
+
   const year = +d3.select("#year-select").property("value") || d3.max(yearList);
 
   const sceneText = [
@@ -306,6 +310,8 @@ function drawScene1(data) {
 }
 
 function drawScene2(data, withAnnotation = false) {
+  var trans_time = 500 //ms
+
   const xExtent = d3.extent(data, d => d.cases_per_100k);
   const yExtent = d3.extent(data, d => d.deaths_per_100k);
 
@@ -333,12 +339,26 @@ function drawScene2(data, withAnnotation = false) {
     .attr("y1", margin.top).attr("y2", height - margin.bottom)
     .attr("stroke", "gray").attr("stroke-dasharray", "4 4").lower();
 
+  svg.append("text")
+    .attr("x", x(xMedian) + 5)
+    .attr("y", margin.top + 12)
+    .attr("font-size", "11px")
+    .attr("fill", "gray")
+    .text("Median Cases");
+
   // Horizontal line for avg deaths
   svg.append("line")
     .attr("x1", margin.left).attr("x2", width - margin.right)
     .attr("y1", y(yMedian)).attr("y2", y(yMedian))
     .attr("stroke", "gray").attr("stroke-dasharray", "4 4").lower();
 
+  svg.append("text")
+    .attr("x", margin.left + 5)
+    .attr("y", y(yMedian) - 5)
+    .attr("font-size", "11px")
+    .attr("fill", "gray")
+    .text("Median Deaths");
+  
   //legend box and tooltip
   const shaped_dots = d3.symbol().type(getShape).size(100);
 
@@ -372,16 +392,56 @@ function drawScene2(data, withAnnotation = false) {
     const makeAnnotations = d3.annotation().annotations(annotations);
     svg.append("g").call(makeAnnotations);
   }
+
+  pendingTimeouts.push(setTimeout(() => {
+    const left_start = margin.left + 20
+    const hint1 = svg.append("text")
+      .attr("class", "scene-hint")
+      .attr("x", left_start)
+      .attr("y", margin.top + 40)
+      .attr("text-anchor", "start")
+      .attr("font-size", "14px")
+      .attr("fill", "gray")
+      .style("opacity", 0);
+
+    // Append tspans before transition
+    hint1.append("tspan")
+      .attr("x", left_start)
+      .attr("dy", "0em")
+      .text("States with higher vaccination level correlate to lower death rate");
+
+    hint1.append("tspan")
+      .attr("x", left_start)
+      .attr("dy", "1.2em")
+      .text("Hover on dots to explore state-level details");
+
+    // Then apply transition to the full text block
+    hint1.transition()
+      .duration(trans_time)
+      .style("opacity", 1);
+
+    // hint text near next button
+    pendingTimeouts.push(setTimeout(() => {
+      d3.select("#next-hint")
+        .text("◀ Click to explore:  Does vaccination lower infection?")
+        .transition()
+        .duration(trans_time)
+        .style("opacity", 1);
+    }, 1000));
+  }, 1600));
 }
 
 function drawScene3(data) {
+  var trans_time = 500 //ms
+
   const xExtent = d3.extent(data, d => d.vaccination_rate);
   const x = d3.scaleLinear()
     .domain([xExtent[0] * 0.98, xExtent[1] * 1.02])  // add slight margin
     .range([margin.left, width - margin.right]);
 
+  const yExtent = d3.extent(data, d => d.cases_per_100k);  // ⬅️ now dynamically calculated like Scene 2
   const y = d3.scaleLinear()
-    .domain([0, d3.max(data, d => d.cases_per_100k)]).nice()
+    .domain([yExtent[0] * 0.95, yExtent[1] * 1.2])
     .range([height - margin.bottom, margin.top]);
 
   svg.append("g")
@@ -412,6 +472,51 @@ function drawScene3(data) {
     .attr("text-anchor", "middle")
     .attr("transform", "rotate(-90)")
     .text("Cases per 100k");
+
+  const correlationNote = [{
+    type: d3.annotationCalloutElbow,
+    note: {
+      title: "Correlation can be seen in year 2021",
+      label: "and not obvious in later years",
+      wrap: 180
+    },
+    connector: { end: "arrow" },
+    x: width / 2 + 50, // position in the middle-ish
+    y: height / 2 - 100,
+    dx: -50,
+    dy: -30
+  }];
+
+  svg.append("g")
+    .attr("class", "annotation-correlation")
+    .call(d3.annotation().type(d3.annotationCalloutElbow).annotations(correlationNote))
+    .style("opacity", 1)
+    .style("display", "inline");
+
+  console.log("debug", svg.select(".annotation-correlation").node());
+
+  pendingTimeouts.push(setTimeout(() => {
+    const left_start = margin.left + 480
+    const hint1 = svg.append("text")
+      .attr("class", "scene-hint")
+      .attr("x", left_start)
+      .attr("y", margin.top + 180)
+      .attr("text-anchor", "start")
+      .attr("font-size", "14px")
+      .attr("fill", "gray")
+      .style("opacity", 0);
+
+    hint1.append("tspan")
+      .attr("x", left_start)
+      .attr("dy", "1.2em")
+      .text("Hover on dots to explore state-level details");
+
+    // Then apply transition to the full text block
+    hint1.transition()
+      .duration(trans_time)
+      .style("opacity", 1);
+  }, 2000));
+
 }
 
 //shared consistent looks for Scene 2 and Scene 3
